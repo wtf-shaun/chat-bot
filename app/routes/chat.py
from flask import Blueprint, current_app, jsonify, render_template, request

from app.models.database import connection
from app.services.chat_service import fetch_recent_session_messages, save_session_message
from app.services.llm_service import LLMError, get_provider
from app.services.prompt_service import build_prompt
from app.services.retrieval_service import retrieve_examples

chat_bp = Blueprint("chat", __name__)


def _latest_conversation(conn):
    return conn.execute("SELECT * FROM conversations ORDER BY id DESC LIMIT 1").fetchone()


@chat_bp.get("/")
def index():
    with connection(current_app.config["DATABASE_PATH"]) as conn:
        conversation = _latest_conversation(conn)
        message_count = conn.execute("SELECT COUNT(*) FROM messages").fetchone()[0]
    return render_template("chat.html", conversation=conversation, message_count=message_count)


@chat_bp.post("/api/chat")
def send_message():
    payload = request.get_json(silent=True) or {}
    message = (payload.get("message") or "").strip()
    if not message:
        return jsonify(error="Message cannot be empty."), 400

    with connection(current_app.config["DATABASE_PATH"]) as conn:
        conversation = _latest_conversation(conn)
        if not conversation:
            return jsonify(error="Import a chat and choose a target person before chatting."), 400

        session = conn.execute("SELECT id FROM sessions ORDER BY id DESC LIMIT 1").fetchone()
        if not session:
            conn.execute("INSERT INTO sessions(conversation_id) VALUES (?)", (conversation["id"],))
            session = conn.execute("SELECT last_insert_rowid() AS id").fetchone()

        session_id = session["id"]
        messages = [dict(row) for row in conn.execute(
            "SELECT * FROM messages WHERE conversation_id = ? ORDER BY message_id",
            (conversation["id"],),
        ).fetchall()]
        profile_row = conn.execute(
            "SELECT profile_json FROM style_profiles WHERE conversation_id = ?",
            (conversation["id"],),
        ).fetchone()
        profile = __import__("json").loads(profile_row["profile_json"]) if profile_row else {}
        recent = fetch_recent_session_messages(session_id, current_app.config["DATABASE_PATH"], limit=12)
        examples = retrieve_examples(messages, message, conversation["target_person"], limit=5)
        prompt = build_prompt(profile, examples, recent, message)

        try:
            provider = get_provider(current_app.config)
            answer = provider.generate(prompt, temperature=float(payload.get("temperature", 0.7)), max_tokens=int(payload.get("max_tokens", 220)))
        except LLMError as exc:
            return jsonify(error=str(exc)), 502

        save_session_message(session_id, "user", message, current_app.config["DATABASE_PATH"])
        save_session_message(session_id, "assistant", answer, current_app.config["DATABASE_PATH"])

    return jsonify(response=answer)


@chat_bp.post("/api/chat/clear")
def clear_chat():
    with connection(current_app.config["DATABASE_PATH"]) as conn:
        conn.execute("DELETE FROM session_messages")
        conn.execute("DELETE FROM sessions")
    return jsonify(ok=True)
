@@ -1,0 +1,84 @@
+import json
+from flask import Blueprint, current_app, jsonify, render_template, request
+
+from app.models.database import connection, json_dumps
+from app.services.parser_service import parse_chat, participants, profile_for
+
+import_bp = Blueprint("import", __name__)
+
+
+@import_bp.get("/import")
+def page():
+    return render_template("import.html")
+
+
+@import_bp.post("/api/import/preview")
+def preview():
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename.lower().endswith(".txt"):
+        return jsonify(error="Upload a .txt chat export."), 400
+
+    raw_bytes = uploaded.read(current_app.config["MAX_UPLOAD_BYTES"] + 1)
+    if len(raw_bytes) > current_app.config["MAX_UPLOAD_BYTES"]:
+        return jsonify(error="File is too large (10 MB maximum)."), 400
+
+    decoded = raw_bytes.decode("utf-8-sig", errors="replace")
+    messages = parse_chat(decoded)
+    if not messages:
+        return jsonify(error="No supported messages were found in this file."), 400
+
+    return jsonify(
+        messages=messages[:20],
+        participants=participants(messages),
+        total=len(messages),
+        raw=decoded,
+    )
+
+
+@import_bp.post("/api/import/commit")
+def commit():
+    body = request.get_json(silent=True) or {}
+    raw_text = body.get("raw", "")
+    target = body.get("target")
+    messages = parse_chat(raw_text)
+    valid_people = participants(messages)
+
+    if not messages:
+        return jsonify(error="No valid messages were found to import."), 400
+    if not target or target not in valid_people:
+        return jsonify(error="Choose a detected participant as the target person."), 400
+
+    with connection(current_app.config["DATABASE_PATH"]) as conn:
+        conn.execute("DELETE FROM message WHERE 1=1")
+        conn.execute("DELETE FROM conversations")
+        conn.execute("DELETE FROM style_profiles")
+        conn.execute("DELETE FROM sessions")
+        conn.execute("DELETE FROM session_messages")
+
+        conn.execute(
+            "INSERT INTO conversations(name, target_person) VALUES (?, ?)",
+            (body.get("name", "Imported chat"), target),
+        )
+        conversation_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+        conn.executemany(
+            "INSERT INTO messages(conversation_id, message_id, timestamp, sender, message, is_target) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    conversation_id,
+                    message.get("message_id", index),
+                    message.get("timestamp").isoformat() if message.get("timestamp") else None,
+                    message.get("sender", ""),
+                    message.get("message", ""),
+                    1 if message.get("sender") == target else 0,
+                )
+                for index, message in enumerate(messages, start=1)
+            ],
+        )
+
+        conn.execute(
+            "INSERT INTO style_profiles(conversation_id, target_person, profile_json) VALUES (?, ?, ?)",
+            (conversation_id, target, json_dumps(profile_for(messages, target))),
+        )
+
+    return jsonify(ok=True, target=target, imported=len(messages))

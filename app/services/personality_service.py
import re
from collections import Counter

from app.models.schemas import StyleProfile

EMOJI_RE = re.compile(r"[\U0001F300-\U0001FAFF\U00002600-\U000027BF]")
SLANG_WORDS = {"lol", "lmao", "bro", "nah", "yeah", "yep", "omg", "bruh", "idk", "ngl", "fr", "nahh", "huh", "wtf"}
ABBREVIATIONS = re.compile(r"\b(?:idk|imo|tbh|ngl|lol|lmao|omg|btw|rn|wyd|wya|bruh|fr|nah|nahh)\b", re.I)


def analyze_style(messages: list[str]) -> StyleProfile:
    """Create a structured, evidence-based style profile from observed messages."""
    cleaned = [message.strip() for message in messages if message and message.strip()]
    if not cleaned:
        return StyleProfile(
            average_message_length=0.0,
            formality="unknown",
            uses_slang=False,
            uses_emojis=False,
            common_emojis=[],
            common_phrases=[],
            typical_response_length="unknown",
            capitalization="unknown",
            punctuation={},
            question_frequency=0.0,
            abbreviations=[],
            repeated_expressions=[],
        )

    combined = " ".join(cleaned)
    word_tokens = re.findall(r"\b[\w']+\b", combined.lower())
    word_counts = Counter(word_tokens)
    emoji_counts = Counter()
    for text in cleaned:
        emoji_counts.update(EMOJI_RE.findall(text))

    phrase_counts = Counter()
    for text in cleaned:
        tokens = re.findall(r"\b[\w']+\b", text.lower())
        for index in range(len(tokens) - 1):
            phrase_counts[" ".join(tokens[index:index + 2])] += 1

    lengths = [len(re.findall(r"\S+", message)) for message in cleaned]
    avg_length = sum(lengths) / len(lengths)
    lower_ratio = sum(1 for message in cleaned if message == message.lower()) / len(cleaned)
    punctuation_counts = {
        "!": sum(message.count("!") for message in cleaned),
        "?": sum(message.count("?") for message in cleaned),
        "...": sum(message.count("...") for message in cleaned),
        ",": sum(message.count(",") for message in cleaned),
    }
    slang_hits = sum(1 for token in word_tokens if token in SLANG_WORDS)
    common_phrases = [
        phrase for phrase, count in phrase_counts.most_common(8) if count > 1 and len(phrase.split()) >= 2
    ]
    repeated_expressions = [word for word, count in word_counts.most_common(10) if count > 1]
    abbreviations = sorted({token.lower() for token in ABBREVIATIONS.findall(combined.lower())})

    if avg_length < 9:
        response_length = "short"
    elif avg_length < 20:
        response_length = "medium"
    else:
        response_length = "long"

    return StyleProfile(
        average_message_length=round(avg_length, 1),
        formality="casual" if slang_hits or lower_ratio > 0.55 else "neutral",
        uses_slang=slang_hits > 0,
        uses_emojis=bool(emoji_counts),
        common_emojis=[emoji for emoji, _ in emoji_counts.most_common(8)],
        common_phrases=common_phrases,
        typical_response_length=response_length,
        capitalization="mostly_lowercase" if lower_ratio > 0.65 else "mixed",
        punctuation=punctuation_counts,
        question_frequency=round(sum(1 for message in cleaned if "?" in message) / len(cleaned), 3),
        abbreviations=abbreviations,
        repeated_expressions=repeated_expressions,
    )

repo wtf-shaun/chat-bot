@@ -1,0 +1,93 @@
+"""Parse raw chat exports into structured message objects."""
+import re
+from datetime import datetime
+
+DATE_PATTERNS = [
+    r"^(?P<date>\d{1,2}/\d{1,2}/\d{2,4},?\s*\d{1,2}:\d{2})\s*-\s*(?P<sender>[^:]+):\s*(?P<message>.*)$",
+    r"^(?P<date>\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2})\s*-\s*(?P<sender>[^:]+):\s*(?P<message>.*)$",
+    r"^(?P<date>\d{1,2}/\d{1,2}/\d{4})\s*\|\s*(?P<sender>[^:]+):\s*(?P<message>.*)$",
+]
+DATE_FORMATS = [
+    "%d/%m/%Y, %H:%M",
+    "%m/%d/%Y, %H:%M",
+    "%d/%m/%y, %H:%M",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%dT%H:%M",
+    "%d/%m/%Y %H:%M",
+]
+
+
+def _parse_date(raw: str):
+    value = (raw or "").strip()
+    if not value:
+        return None
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def parse_chat(text: str) -> list[dict]:
+    """Parse a text export with tolerant WhatsApp-like date+sender headers."""
+    if not text or not text.strip():
+        return []
+
+    rows: list[dict] = []
+    current: dict | None = None
+
+    for line in text.replace("\r\n", "\n").split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        match = None
+        for pattern in DATE_PATTERNS:
+            compiled = re.compile(pattern)
+            match = compiled.match(stripped)
+            if match:
+                break
+
+        if match:
+            if current:
+                rows.append(current)
+            current = {
+                "timestamp": _parse_date(match.group("date")),
+                "sender": match.group("sender").strip(),
+                "message": match.group("message").strip(),
+            }
+            continue
+
+        if current and stripped:
+            current["message"] = f"{current['message']}\n{stripped}".strip()
+
+    if current:
+        rows.append(current)
+
+    for index, item in enumerate(rows, start=1):
+        item["message_id"] = index
+    return rows
+
+
+def participants(messages: list[dict]) -> list[str]:
+    """Return the distinct senders in order."""
+    seen = set()
+    ordered: list[str] = []
+    for message in messages:
+        sender = str(message.get("sender", "")).strip()
+        if sender and sender not in seen:
+            seen.add(sender)
+            ordered.append(sender)
+    return ordered
+
+
+def profile_for(messages: list[dict], target: str):
+    """Build a style profile from the target person's messages."""
+    from app.services.personality_service import analyze_style
+
+    target_messages = [message["message"] for message in messages if message.get("sender") == target]
+    return analyze_style(target_messages).as_dict()

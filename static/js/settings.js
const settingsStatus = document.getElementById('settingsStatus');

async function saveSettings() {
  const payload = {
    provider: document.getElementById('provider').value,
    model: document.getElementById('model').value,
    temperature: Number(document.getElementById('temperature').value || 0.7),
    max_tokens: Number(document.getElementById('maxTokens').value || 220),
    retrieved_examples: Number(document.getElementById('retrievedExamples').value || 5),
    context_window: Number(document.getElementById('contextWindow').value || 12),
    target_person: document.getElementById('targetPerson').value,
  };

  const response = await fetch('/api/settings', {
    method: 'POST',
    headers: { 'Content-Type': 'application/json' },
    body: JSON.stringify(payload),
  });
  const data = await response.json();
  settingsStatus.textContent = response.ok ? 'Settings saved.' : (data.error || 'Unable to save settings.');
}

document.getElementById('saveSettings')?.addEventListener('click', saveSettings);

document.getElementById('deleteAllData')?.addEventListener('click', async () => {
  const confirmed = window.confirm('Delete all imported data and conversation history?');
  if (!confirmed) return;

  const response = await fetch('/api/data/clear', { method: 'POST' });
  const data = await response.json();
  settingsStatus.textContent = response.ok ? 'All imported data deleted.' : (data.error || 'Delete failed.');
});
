@@ -1,0 +1,80 @@
+const uploadForm = document.getElementById('uploadForm');
+const fileInput = document.getElementById('fileInput');
+const previewPanel = document.getElementById('previewPanel');
+const errorBox = document.getElementById('errorBox');
+const summaryText = document.getElementById('summaryText');
+const messagePreview = document.getElementById('messagePreview');
+const targetPerson = document.getElementById('targetPerson');
+
+function showError(message) {
+  errorBox.textContent = message;
+  errorBox.classList.remove('hidden');
+}
+
+function hideError() {
+  errorBox.classList.add('hidden');
+  errorBox.textContent = '';
+}
+
+uploadForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  hideError();
+
+  const file = fileInput.files[0];
+  if (!file) {
+    showError('Choose a .txt file first.');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const response = await fetch('/api/import/preview', {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Unable to preview file.');
+    }
+
+    previewPanel.classList.remove('hidden');
+    summaryText.textContent = `Messages imported: ${data.total} · Participants detected: ${data.participants.length}`;
+    messagePreview.textContent = (data.messages || []).map((row) => `${row.sender}: ${row.message}`).join('\n');
+
+    targetPerson.innerHTML = (data.participants || []).map((person) => `<option value="${person}">${person}</option>`).join('');
+  } catch (error) {
+    showError(error.message);
+  }
+});
+
+document.getElementById('beginImport')?.addEventListener('click', async () => {
+  const target = targetPerson.value;
+  const formData = new FormData(uploadForm);
+  const file = fileInput.files[0];
+  if (!file) {
+    showError('Please choose a file before starting import.');
+    return;
+  }
+
+  const response = await fetch('/api/import/preview', {
+    method: 'POST',
+    body: formData,
+  });
+  const previewData = await response.json();
+
+  const commitResponse = await fetch('/api/import/commit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: previewData.raw, target, name: 'Imported chat' }),
+  });
+  const commitData = await commitResponse.json();
+
+  if (!commitResponse.ok) {
+    showError(commitData.error || 'Import failed.');
+    return;
+  }
+
+  window.location.href = '/';
+});

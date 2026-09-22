@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Import chat history</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+  </head>
+  <body>
+    <main class="shell narrow-shell">
+      <header class="topbar">
+        <div>
+          <h1>Import chat history</h1>
+        </div>
+        <a href="/">Back to chat</a>
+      </header>
+
+      <p class="muted">Files stay local. Only compact retrieved context is sent to the configured external LLM when enabled.</p>
+
+      <form id="uploadForm" class="stack-form">
+        <label for="fileInput">Choose a .txt export</label>
+        <input id="fileInput" type="file" name="file" accept=".txt" required>
+        <button type="submit">Preview messages</button>
+      </form>
+
+      <div id="errorBox" class="error-box hidden"></div>
+
+      <section id="previewPanel" class="panel hidden">
+        <p id="summaryText"></p>
+        <div id="messagePreview" class="message-preview"></div>
+        <label for="targetPerson">Target person</label>
+        <select id="targetPerson"></select>
+        <button id="beginImport" type="button">Analyze style and start chat</button>
+      </section>
+    </main>
+
+    <script src="/static/js/import.js"></script>
+  </body>
+</html>

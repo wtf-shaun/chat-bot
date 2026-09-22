@@ -1,0 +1,77 @@
+"""LLM abstraction with provider interface and mock/openai-compatible implementations."""
+from __future__ import annotations
+
+import requests
+
+
+class LLMError(RuntimeError):
+    """Raised when the provider fails or configuration is invalid."""
+
+
+class LLMProvider:
+    """Base interface for all language model providers."""
+
+    def generate(self, messages, temperature: float = 0.7, max_tokens: int = 200) -> str:
+        raise NotImplementedError
+
+
+class MockProvider(LLMProvider):
+    """A deterministic provider for local, offline development."""
+
+    def generate(self, messages, temperature: float = 0.7, max_tokens: int = 200) -> str:
+        if not messages:
+            return "bro idk 😭"
+        last = messages[-1].get("content", "").lower()
+        if "yesterday" in last:
+            return "bro I don't remember 😭"
+        if "what" in last or "how" in last:
+            return "bro idk lol"
+        return "nahhh 😭 tell me more"
+
+
+class OpenAICompatibleProvider(LLMProvider):
+    """Thin wrapper around OpenAI-compatible HTTP APIs."""
+
+    def __init__(self, api_key: str, model: str, base_url: str | None = None):
+        self.api_key = api_key
+        self.model = model
+        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+
+    def generate(self, messages, temperature: float = 0.7, max_tokens: int = 200) -> str:
+        if not self.api_key or not self.model:
+            raise LLMError("LLM_API_KEY and LLM_MODEL are required for the configured provider.")
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            response = requests.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError, requests.RequestException) as exc:
+            raise LLMError("The configured LLM request failed.") from exc
+
+
+def get_provider(config):
+    """Return the provider selected by configuration."""
+    provider_name = (config.get("LLM_PROVIDER", "mock") or "mock").lower()
+    if provider_name == "mock":
+        return MockProvider()
+    return OpenAICompatibleProvider(
+        api_key=config.get("LLM_API_KEY", ""),
+        model=config.get("LLM_MODEL", ""),
+        base_url=config.get("LLM_BASE_URL", ""),
+    )

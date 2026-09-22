@@ -1,0 +1,57 @@
+"""Simple retrieval layer with lexical fallback and optional semantic support."""
+import math
+import re
+from collections import Counter
+
+
+def _tokens(text: str) -> Counter:
+    return Counter(re.findall(r"\b[\w']+\b", (text or "").lower()))
+
+
+def _cosine_similarity(a: str, b: str) -> float:
+    left, right = _tokens(a), _tokens(b)
+    if not left or not right:
+        return 0.0
+    common = set(left) & set(right)
+    dot = sum(left[word] * right[word] for word in common)
+    norm = math.sqrt(sum(value * value for value in left.values()) * sum(value * value for value in right.values()))
+    return dot / norm if norm else 0.0
+
+
+def retrieve_examples(messages, query: str, target: str, limit: int = 5):
+    """Retrieve relevant historical exchanges for the target person."""
+    if not messages:
+        return []
+
+    target_rows = [message for message in messages if message.get("sender") == target]
+    scored: list[tuple[float, str, str, str]] = []
+
+    for row in target_rows:
+        message_id = row.get("message_id", 0)
+        prior = [
+            message for message in messages if message.get("message_id", 0) < message_id and message.get("sender") != target
+        ]
+        user_context = prior[-1]["message"] if prior else ""
+        response = row.get("message", "")
+        score = _cosine_similarity(query, f"{user_context} {response}")
+        if user_context or response:
+            scored.append((score, user_context, response, row.get("sender", target)))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+
+    unique: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for score, user_context, target_response, _sender in scored:
+        key = (user_context.strip(), target_response.strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append({
+            "user": user_context.strip(),
+            "target": target_response.strip(),
+            "score": round(score, 3),
+        })
+        if len(unique) >= max(1, min(8, int(limit or 5))):
+            break
+
+    return unique
